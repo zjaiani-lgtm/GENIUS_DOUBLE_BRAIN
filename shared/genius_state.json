@@ -1,1 +1,20 @@
 
+# execution/shared_state.py
+import json
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict
+
+DEFAULT_PATH = Path("shared/genius_state.json")
+
+def write_genius_state(state: Dict[str, Any], path: Path = DEFAULT_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        **state,
+        "updated_at_utc": datetime.utcnow().isoformat() + "Z"
+    }
+
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
