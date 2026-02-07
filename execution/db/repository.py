@@ -194,6 +194,14 @@ def has_active_oco_for_symbol(symbol: str) -> bool:
     conn.close()
     return row is not None
 
+def get_open_positions_count() -> int:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM positions WHERE status = 'OPEN'")
+    n = int(cur.fetchone()[0] or 0)
+    conn.close()
+    return n
+
 # ---------------- EXECUTED SIGNALS (IDEMPOTENCY) ----------------
 
 def signal_id_already_executed(signal_id: str) -> bool:
@@ -225,3 +233,4 @@ def mark_signal_id_executed(signal_id: str, signal_hash: str = None, action: str
     )
     conn.commit()
     conn.close()
+
