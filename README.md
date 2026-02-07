@@ -1,42 +1,27 @@
-# Project Title: GENIUS DOUBLE BRAIN
+# GENIUS BOT MAN — Execution Worker
 
-## Project Description
-GENIUS DOUBLE BRAIN is an innovative solution designed to enhance productivity and decision-making through advanced algorithms and user-friendly interfaces. This project aims to revolutionize the way individuals and teams collaborate, streamline their processes, and achieve their goals.
+This repository contains ONLY the Execution Layer.
 
-## Features
-- **Intuitive User Interface**: A clean and modern UI that enhances user experience.
-- **Real-time Collaboration**: Multiple users can work together seamlessly.
-- **Advanced Analytics**: Provides insights through data analysis to support informed decisions.
-- **Cross-Platform Compatibility**: Accessible on various devices, ensuring flexibility and convenience.
+## Rules (Non-Negotiable)
+- This bot NEVER makes decisions
+- This bot NEVER generates signals
+- This bot executes ONLY certified signals from SIGNAL_OUTBOX
+- Risk rules, limits, and kill-switch are mandatory
+- DEMO → LIVE transition is governed by DB flags & human approval
 
-## Installation
-To install the GENIUS DOUBLE BRAIN project, follow these steps:
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/zjaiani-lgtm/GENIUS_DOUBLE_BRAIN.git
-   ```
-2. Navigate to the project directory:
-   ```bash
-   cd GENIUS_DOUBLE_BRAIN
-   ```
-3. Install dependencies:
-   ```bash
-   npm install
-   ```
+## What lives here
+- Execution engine (Python)
+- Exchange adapter (ccxt / Binance)
+- Virtual Wallet (DEMO)
+- Startup Sync & Risk Guards
 
-## Usage
-After installation, you can start the application by running:
-```bash
-npm start
-```
-Visit `http://localhost:3000` in your web browser to access the application.
+## What does NOT live here
+- Strategy logic
+- Decision logic
+- Excel brain
+- Signal generation
 
-## Contributing
-We welcome contributions from the community! If you'd like to contribute, please follow these steps:
-1. Fork the repository.
-2. Create a new branch (`git checkout -b feature/YourFeature`).
-3. Make your changes and commit them (`git commit -m 'Add some feature'`).
-4. Push to the branch (`git push origin feature/YourFeature`).
-5. Open a Pull Request.
+## Developer Instructions
+Read `/specs/developer_job_spec.md` before writing any code.
 
-Thank you for considering contributing to our project!
+Any deviation from specs is considered a violation.
