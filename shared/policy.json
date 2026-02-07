@@ -1,1 +1,9 @@
+{
+  "policy_version": "v1",
+  "valid_until": "2099-12-31T00:00:00Z",
+  "max_daily_drawdown": 0.03,
+  "max_open_positions": 1,
+  "allowed_strategies": ["EXECUTION_ONLY"],
+  "emergency_stop": false
+}
 
