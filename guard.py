@@ -10,7 +10,8 @@ POLICY_PATH = Path("shared/policy.json")
 GENIUS_STATE_PATH_PRIMARY = Path("shared/genius_state.json")
 GENIUS_STATE_PATH_FALLBACK = Path("shared/genius-state.json")
 
-GENIUS_CMD = ["python", "execution/main.py"]
+GENIUS_CMD = ["python", "-m", "execution.main"]
+
 
 
 def stop(reason: str):
