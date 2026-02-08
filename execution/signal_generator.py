@@ -1,205 +1,105 @@
 import os
 import time
 import uuid
-import logging
-from datetime import datetime
-from typing import Optional, Dict, Any, Tuple, List
+from datetime import datetime, timezone
+from pathlib import Path
 
 import ccxt
+import openpyxl
 
 from execution.signal_client import append_signal
-from execution.db.repository import has_active_oco_for_symbol
-
-logger = logging.getLogger("gbm")
-
-TIMEFRAME = os.getenv("BOT_TIMEFRAME", "15m")
-CANDLE_LIMIT = int(os.getenv("BOT_CANDLE_LIMIT", "50"))
-COOLDOWN_SECONDS = int(os.getenv("BOT_SIGNAL_COOLDOWN_SECONDS", "180"))
-
-ALLOW_LIVE_SIGNALS = os.getenv("ALLOW_LIVE_SIGNALS", "false").lower() == "true"
-
-# USDT per trade (prevents NOTIONAL issues & keeps sizing consistent across symbols)
-BOT_QUOTE_PER_TRADE = float(os.getenv("BOT_QUOTE_PER_TRADE", "15"))
-
-CONFIDENCE = float(os.getenv("BOT_SIGNAL_CONFIDENCE", "0.55"))
-BLOCK_SIGNALS_WHEN_ACTIVE_OCO = os.getenv("BLOCK_SIGNALS_WHEN_ACTIVE_OCO", "true").lower() == "true"
-
-GEN_DEBUG = os.getenv("GEN_DEBUG", "true").lower() == "true"
-GEN_LOG_EVERY_TICK = os.getenv("GEN_LOG_EVERY_TICK", "true").lower() == "true"
-
-# ✅ Chop / volatility gates (NEW)
-# 1) Minimum percent move (range) over last 20 candles
-MIN_MOVE_PCT = float(os.getenv("MIN_MOVE_PCT", "0.35"))  # %
-# 2) Price must be at least this % above MA20 to avoid micro-cross noise
-MA_GAP_PCT = float(os.getenv("MA_GAP_PCT", "0.12"))  # %
-
-_last_emit_ts: float = 0.0
-_last_signature: Optional[Tuple[str, str]] = None
-
-EXCHANGE = ccxt.binance({"enableRateLimit": True})
 
 
-def _now_utc_iso() -> str:
-    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+EXCEL_PATH = Path(os.getenv("BRAIN_XLSX_PATH", "/var/data/brain.xlsx"))
 
 
-def _parse_symbols() -> List[str]:
-    raw = os.getenv("BOT_SYMBOLS", "").strip()
-    if not raw:
-        raw = os.getenv("SYMBOL_WHITELIST", "").strip()
-    if not raw:
-        raw = os.getenv("BOT_SYMBOL", "BTC/USDT").strip()
+def _read_cfg():
+    wb = openpyxl.load_workbook(EXCEL_PATH, data_only=True)
+    ws = wb["GENERATOR_CONFIG"]
 
-    syms = []
-    for s in raw.split(","):
-        s = s.strip()
-        if not s:
-            continue
-        syms.append(s.upper())
-    return syms
-
-
-SYMBOLS = _parse_symbols()
-
-
-def _has_active_oco(symbol: str) -> bool:
-    try:
-        return has_active_oco_for_symbol(symbol)
-    except Exception as e:
-        # safe default: assume active_oco to avoid opening uncontrolled trades
-        logger.warning(f"[GEN] ACTIVE_OCO_CHECK_FAIL | symbol={symbol} err={e} -> assume active_oco=True")
-        return True
-
-
-def _pct(a: float, b: float) -> float:
-    # percent change from b -> a
-    if b == 0:
-        return 0.0
-    return (a - b) / b * 100.0
-
-
-def generate_signal() -> Optional[Dict[str, Any]]:
-    for symbol in SYMBOLS:
-        if BLOCK_SIGNALS_WHEN_ACTIVE_OCO and _has_active_oco(symbol):
-            if GEN_DEBUG:
-                logger.info(f"[GEN] SKIP_SYMBOL | symbol={symbol} reason=active_oco=True")
-            continue
-
+    def get(addr, cast, default):
+        v = ws[addr].value
+        if v is None:
+            return default
         try:
-            t0 = time.time()
-            ohlcv = EXCHANGE.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=CANDLE_LIMIT)
-            dt_ms = int((time.time() - t0) * 1000)
-            if GEN_DEBUG:
-                logger.info(f"[GEN] FETCH_OK | symbol={symbol} tf={TIMEFRAME} candles={len(ohlcv) if ohlcv else 0} dt={dt_ms}ms")
-        except Exception as e:
-            logger.exception(f"[GEN] FETCH_FAIL | symbol={symbol} tf={TIMEFRAME} err={e}")
-            continue
+            return cast(v)
+        except Exception:
+            return default
 
-        if not ohlcv or len(ohlcv) < 25:
-            if GEN_LOG_EVERY_TICK:
-                logger.info(f"[GEN] NO_SIGNAL | symbol={symbol} reason=not_enough_candles got={len(ohlcv) if ohlcv else 0} need>=25")
-            continue
+    symbol = get("B1", str, "BTC/USDT").strip()
+    tf = get("B2", str, "1m").strip()
+    limit = get("B3", int, 50)
+    ma_period = get("B4", int, 20)
+    min_conf = get("B5", float, 0.70)
+    usdt_size = get("B6", float, 5.0)
+    tp_pct = get("B7", float, 0.03)
+    sl_pct = get("B8", float, 0.015)
 
-        closes = [float(c[4]) for c in ohlcv]
-        last = float(closes[-1])
-        prev = float(closes[-2])
-        ma20 = float(sum(closes[-20:]) / 20.0)
+    enabled_raw = ws["B9"].value
+    enabled = str(enabled_raw).strip().lower() in ("true", "1", "yes", "y")
 
-        # Core conditions
-        cond_ma = last > ma20
-        cond_mom = last > prev
+    return dict(
+        symbol=symbol, tf=tf, limit=limit, ma_period=ma_period,
+        min_conf=min_conf, usdt_size=usdt_size, tp_pct=tp_pct, sl_pct=sl_pct,
+        enabled=enabled
+    )
 
-        # ✅ NEW gate 1: ensure there is real movement (avoid chop)
-        window = closes[-20:]
-        hi = max(window)
-        lo = min(window)
-        move_pct = _pct(hi, lo)  # range % over window
-        cond_move = move_pct >= MIN_MOVE_PCT
 
-        # ✅ NEW gate 2: require real separation above MA20
-        ma_gap_pct = _pct(last, ma20)
-        cond_gap = ma_gap_pct >= MA_GAP_PCT
-
-        if GEN_LOG_EVERY_TICK:
-            logger.info(
-                f"[GEN] SNAPSHOT | symbol={symbol} last={last:.2f} prev={prev:.2f} ma20={ma20:.2f} "
-                f"move20={move_pct:.2f}% ma_gap={ma_gap_pct:.2f}% "
-                f"cond(last>ma20)={cond_ma} cond(last>prev)={cond_mom} cond(move>={MIN_MOVE_PCT})={cond_move} cond(gap>={MA_GAP_PCT})={cond_gap}"
-            )
-
-        if not (cond_ma and cond_mom and cond_move and cond_gap):
-            if GEN_LOG_EVERY_TICK:
-                reason = []
-                if not cond_ma:
-                    reason.append("last<=ma20")
-                if not cond_mom:
-                    reason.append("last<=prev")
-                if not cond_move:
-                    reason.append(f"move20<{MIN_MOVE_PCT}%")
-                if not cond_gap:
-                    reason.append(f"ma_gap<{MA_GAP_PCT}%")
-                logger.info(f"[GEN] NO_SIGNAL | symbol={symbol} reason={','.join(reason)}")
-            continue
-
-        mode_allowed = {"demo": True, "live": bool(ALLOW_LIVE_SIGNALS)}
-        signal_id = f"GBM-AUTO-{uuid.uuid4().hex}"
-
-        quote_amount = float(BOT_QUOTE_PER_TRADE)
-        base_amount = quote_amount / float(last) if float(last) > 0 else 0.0
-
-        sig = {
-            "signal_id": signal_id,
-            "timestamp_utc": _now_utc_iso(),
-            "final_verdict": "TRADE",
-            "certified_signal": True,
-            "confidence": CONFIDENCE,
-            "mode_allowed": mode_allowed,
-            "execution": {
-                "symbol": symbol,
-                "direction": "LONG",
-                "entry": {"type": "MARKET", "price": None},
-                "position_size": base_amount,
-                "quote_amount": quote_amount,
-                "risk": {"stop_loss": None, "take_profit": None},
-            },
-        }
-
-        if GEN_DEBUG:
-            logger.info(
-                f"[GEN] SIGNAL_READY | id={signal_id} verdict=TRADE symbol={symbol} dir=LONG "
-                f"mode_allowed={mode_allowed} quote_amount={quote_amount} base_size={base_amount}"
-            )
-
-        return sig
-
-    return None
+def _sma(vals, n):
+    if len(vals) < n:
+        return None
+    return sum(vals[-n:]) / n
 
 
 def run_once(outbox_path: str) -> bool:
-    global _last_emit_ts, _last_signature
+    """
+    Returns True if a signal was written.
+    Writes a signal in the JSON structure your signal_client expects.
+    """
+    if not EXCEL_PATH.exists():
+        raise FileNotFoundError(f"brain.xlsx not found at {EXCEL_PATH}")
 
-    now = time.time()
-    elapsed = now - _last_emit_ts
-    if elapsed < COOLDOWN_SECONDS:
-        if GEN_DEBUG:
-            logger.info(f"[GEN] SKIP | cooldown_active left~{int(COOLDOWN_SECONDS - elapsed)}s")
+    cfg = _read_cfg()
+    if not cfg["enabled"]:
         return False
 
-    sig = generate_signal()
-    if not sig:
+    ex = ccxt.binance({"enableRateLimit": True, "options": {"defaultType": "spot"}})
+
+    ohlcv = ex.fetch_ohlcv(cfg["symbol"], timeframe=cfg["tf"], limit=cfg["limit"])
+    closes = [c[4] for c in ohlcv]
+    last = closes[-1]
+    ma = _sma(closes, cfg["ma_period"])
+    if ma is None:
         return False
 
-    symbol = (sig.get("execution") or {}).get("symbol")
-    direction = (sig.get("execution") or {}).get("direction")
-    signature = (str(symbol), str(direction))
-
-    try:
-        append_signal(sig, outbox_path)
-        _last_emit_ts = now
-        _last_signature = signature
-        if GEN_DEBUG:
-            logger.info(f"[GEN] OUTBOX_APPEND_OK | path={outbox_path} id={sig.get('signal_id')} signature={signature}")
-        return True
-    except Exception as e:
-        logger.exception(f"[GEN] OUTBOX_APPEND_FAIL | path={outbox_path} err={e}")
+    # მაგალითი rule (შემდეგ შენს Excel/DYZEN წესზე გადავიყვანთ):
+    confidence = 0.75 if last > ma else 0.50
+    if not (last > ma and confidence >= cfg["min_conf"]):
         return False
+
+    # USDT → base amount
+    position_size = cfg["usdt_size"] / last
+
+    tp_price = last * (1 + cfg["tp_pct"])
+    sl_stop = last * (1 - cfg["sl_pct"])
+    sl_limit = sl_stop * 0.999  # პატარა slip buffer
+
+    signal = {
+        "signal_id": f"DYZEN-{uuid.uuid4().hex[:12]}",
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "final_verdict": "TRADE",
+        "certified_signal": True,
+        "execution": {
+            "symbol": cfg["symbol"],
+            "direction": "LONG",
+            "position_size": float(position_size),
+            "entry": {"type": "MARKET"},
+            "exits": {
+                "tp": {"type": "LIMIT", "price": float(tp_price)},
+                "sl": {"type": "STOP_LIMIT", "stop_price": float(sl_stop), "limit_price": float(sl_limit)}
+            }
+        }
+    }
+
+    append_signal(signal, outbox_path)
+    return True
