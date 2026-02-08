@@ -15,56 +15,56 @@ def get_connection() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """
-    Creates tables and bootstraps system_state row if missing.
-    """
     conn = get_connection()
     cur = conn.cursor()
 
-    # --- schema (minimal, safe) ---
-    cur.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS system_state (
-            id INTEGER PRIMARY KEY,
-            status TEXT NOT NULL,
-            startup_sync_ok INTEGER NOT NULL,
-            kill_switch INTEGER NOT NULL,
-            updated_at TEXT NOT NULL
-        );
+    cur.executescript("""
+    CREATE TABLE IF NOT EXISTS system_state (
+        id INTEGER PRIMARY KEY,
+        status TEXT NOT NULL,
+        startup_sync_ok INTEGER NOT NULL,
+        kill_switch INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+    );
 
-        CREATE TABLE IF NOT EXISTS positions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT NOT NULL,
-            side TEXT NOT NULL,
-            size REAL NOT NULL,
-            entry_price REAL NOT NULL,
-            status TEXT NOT NULL,
-            opened_at TEXT NOT NULL,
-            closed_at TEXT,
-            pnl REAL
-        );
+    CREATE TABLE IF NOT EXISTS positions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol TEXT NOT NULL,
+        side TEXT NOT NULL,
+        size REAL NOT NULL,
+        entry_price REAL NOT NULL,
+        status TEXT NOT NULL,
+        opened_at TEXT NOT NULL,
+        closed_at TEXT,
+        pnl REAL
+    );
 
-        CREATE TABLE IF NOT EXISTS audit_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_type TEXT NOT NULL,
-            message TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        """
-    )
+    CREATE TABLE IF NOT EXISTS audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_type TEXT NOT NULL,
+        message TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
 
-    # --- bootstrap system_state ---
-    cur.execute("SELECT COUNT(*) FROM system_state WHERE id = 1")
-    exists = int(cur.fetchone()[0] or 0)
-
-    if exists == 0:
-        cur.execute(
-            """
-            INSERT INTO system_state (id, status, startup_sync_ok, kill_switch, updated_at)
-            VALUES (1, 'PAUSED', 0, 1, ?)
-            """,
-            (datetime.now(timezone.utc).isoformat(),),
-        )
+    -- 🔽 ეს დაამატე
+    CREATE TABLE IF NOT EXISTS oco_links (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        signal_id TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        base_asset TEXT,
+        tp_order_id TEXT,
+        sl_order_id TEXT,
+        tp_price REAL,
+        sl_stop_price REAL,
+        sl_limit_price REAL,
+        amount REAL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    """)
 
     conn.commit()
     conn.close()
+
+
