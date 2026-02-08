@@ -21,10 +21,10 @@ logger = logging.getLogger("gbm")
 
 def _bootstrap_state_if_needed() -> None:
     """
-    IMPORTANT for dual-brain:
-    - We do NOT 'self-heal' into RUNNING automatically anymore.
-    - Guard + DB gates must control when system runs.
-    This function only logs current DB state for visibility.
+    Dual-brain rule:
+    - We do NOT auto self-heal to RUNNING here.
+    - Guard + DB gates control when system runs.
+    This function only logs the current DB state for visibility.
     """
     raw = get_system_state()
     if not isinstance(raw, (list, tuple)) or len(raw) < 5:
@@ -41,6 +41,24 @@ def _bootstrap_state_if_needed() -> None:
         f"BOOTSTRAP_STATE | status={status} startup_sync_ok={startup_sync_ok} "
         f"kill_db={kill_switch_db} env_kill={env_kill}"
     )
+
+
+def _try_import_generator():
+    """
+    Optional: Excel-based generator. If missing or broken, worker still runs (consumer-only).
+    Must expose: execution/signal_generator.py -> run_once(outbox_path) -> bool
+    """
+    try:
+        from execution.signal_generator import run_once as generate_once  # type: ignore
+        logger.info("SIGNAL_GENERATOR | loaded execution.signal_generator.run_once")
+        return generate_once
+    except Exception as e:
+        logger.warning(f"GENERATOR_IMPORT_FAIL | err={e} -> generator disabled (consumer-only)")
+        try:
+            log_event("GENERATOR_IMPORT_FAIL", f"err={e}")
+        except Exception:
+            pass
+        return None
 
 
 def _safe_pop_next_signal(outbox_path: str) -> Optional[Dict[str, Any]]:
@@ -91,11 +109,14 @@ def main():
     except Exception as e:
         logger.warning(f"OCO_RECONCILE_START_WARN | err={e}")
 
+    # optional generator (Excel-based)
+    generate_once = _try_import_generator()
+
     logger.info(f"GENIUS BOT MAN worker starting | MODE={mode}")
     logger.info(f"OUTBOX_PATH={outbox_path}")
     logger.info(f"LOOP_SLEEP_SECONDS={sleep_s}")
 
-    # Write initial state (so Guard sees we're alive)
+    # initial shared state
     _write_shared_state(mode=mode, worker_status="RUNNING")
 
     while True:
@@ -103,7 +124,7 @@ def main():
         try:
             # 0) ABSOLUTE KILL SWITCH (before everything)
             if is_kill_switch_active():
-                logger.warning("KILL_SWITCH_ACTIVE | worker will not pop/execute signals")
+                logger.warning("KILL_SWITCH_ACTIVE | worker will not generate/pop/execute signals")
                 try:
                     log_event("WORKER_KILL_SWITCH_ACTIVE", "blocked before loop actions")
                 except Exception:
@@ -113,13 +134,26 @@ def main():
                 time.sleep(sleep_s)
                 continue
 
-            # 1) reconcile OCO
+            # 1) reconcile OCO (best-effort)
             try:
                 engine.reconcile_oco()
             except Exception as e:
                 logger.warning(f"OCO_RECONCILE_LOOP_WARN | err={e}")
 
-            # 2) pop + execute (NO generator in dual-brain)
+            # 2) optional generator step (Excel -> outbox)
+            if generate_once is not None:
+                try:
+                    created = generate_once(outbox_path)
+                    if created:
+                        logger.info("SIGNAL_GENERATOR | signal created")
+                except Exception as e:
+                    logger.exception(f"SIGNAL_GENERATOR_FAIL | err={e}")
+                    try:
+                        log_event("SIGNAL_GENERATOR_FAIL", f"err={e}")
+                    except Exception:
+                        pass
+
+            # 3) pop + execute
             sig = _safe_pop_next_signal(outbox_path)
             if sig:
                 last_signal_id = str(sig.get("signal_id") or "")
@@ -135,7 +169,7 @@ def main():
             except Exception:
                 pass
 
-        # 3) update shared state every loop (so Guard always has fresh info)
+        # 4) update shared state every loop
         _write_shared_state(mode=mode, worker_status="RUNNING", last_signal_id=last_signal_id)
 
         time.sleep(sleep_s)
