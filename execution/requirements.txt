@@ -1,3 +1,4 @@
 ccxt
 requests
+openpyxl==3.1.2
 
