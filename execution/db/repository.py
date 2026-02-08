@@ -1,5 +1,11 @@
-from datetime import datetime
+# execution/db/repository.py
+from datetime import datetime, timezone
 from execution.db.db import get_connection
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
 
 # ---------------- SYSTEM STATE ----------------
 
@@ -11,6 +17,7 @@ def get_system_state():
     conn.close()
     return row
 
+
 def update_system_state(status=None, startup_sync_ok=None, kill_switch=None):
     conn = get_connection()
     cur = conn.cursor()
@@ -20,7 +27,7 @@ def update_system_state(status=None, startup_sync_ok=None, kill_switch=None):
 
     if status is not None:
         fields.append("status = ?")
-        values.append(status)
+        values.append(str(status))
 
     if startup_sync_ok is not None:
         fields.append("startup_sync_ok = ?")
@@ -31,13 +38,14 @@ def update_system_state(status=None, startup_sync_ok=None, kill_switch=None):
         values.append(int(kill_switch))
 
     fields.append("updated_at = ?")
-    values.append(datetime.utcnow().isoformat())
+    values.append(_utc_now())
 
     sql = f"UPDATE system_state SET {', '.join(fields)} WHERE id = 1"
     cur.execute(sql, values)
 
     conn.commit()
     conn.close()
+
 
 # ---------------- POSITIONS ----------------
 
@@ -48,6 +56,7 @@ def get_open_positions():
     rows = cur.fetchall()
     conn.close()
     return rows
+
 
 def get_latest_open_position(symbol: str):
     conn = get_connection()
@@ -60,11 +69,12 @@ def get_latest_open_position(symbol: str):
         ORDER BY id DESC
         LIMIT 1
         """,
-        (symbol,)
+        (str(symbol),)
     )
     row = cur.fetchone()
     conn.close()
     return row
+
 
 def open_position(symbol, side, size, entry_price):
     conn = get_connection()
@@ -75,10 +85,11 @@ def open_position(symbol, side, size, entry_price):
         (symbol, side, size, entry_price, status, opened_at)
         VALUES (?, ?, ?, ?, 'OPEN', ?)
         """,
-        (symbol, side, float(size), float(entry_price), datetime.utcnow().isoformat())
+        (str(symbol), str(side), float(size), float(entry_price), _utc_now())
     )
     conn.commit()
     conn.close()
+
 
 def close_position(position_id: int, close_price: float, pnl: float):
     conn = get_connection()
@@ -89,10 +100,11 @@ def close_position(position_id: int, close_price: float, pnl: float):
         SET status='CLOSED', closed_at=?, pnl=?
         WHERE id=?
         """,
-        (datetime.utcnow().isoformat(), float(pnl), int(position_id))
+        (_utc_now(), float(pnl), int(position_id))
     )
     conn.commit()
     conn.close()
+
 
 # ---------------- AUDIT LOG ----------------
 
@@ -104,10 +116,11 @@ def log_event(event_type, message):
         INSERT INTO audit_log (event_type, message, created_at)
         VALUES (?, ?, ?)
         """,
-        (event_type, message, datetime.utcnow().isoformat())
+        (str(event_type), str(message), _utc_now())
     )
     conn.commit()
     conn.close()
+
 
 # ---------------- OCO LINKS ----------------
 
@@ -124,7 +137,7 @@ def create_oco_link(
 ):
     conn = get_connection()
     cur = conn.cursor()
-    now = datetime.utcnow().isoformat()
+    now = _utc_now()
     cur.execute(
         """
         INSERT INTO oco_links
@@ -132,7 +145,7 @@ def create_oco_link(
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)
         """,
         (
-            signal_id, symbol, base_asset,
+            str(signal_id), str(symbol), str(base_asset),
             str(tp_order_id), str(sl_order_id),
             float(tp_price), float(sl_stop_price), float(sl_limit_price),
             float(amount),
@@ -141,6 +154,7 @@ def create_oco_link(
     )
     conn.commit()
     conn.close()
+
 
 def set_oco_status(link_id: int, status: str):
     conn = get_connection()
@@ -151,10 +165,11 @@ def set_oco_status(link_id: int, status: str):
         SET status=?, updated_at=?
         WHERE id=?
         """,
-        (status, datetime.utcnow().isoformat(), int(link_id))
+        (str(status), _utc_now(), int(link_id))
     )
     conn.commit()
     conn.close()
+
 
 def list_active_oco_links(limit: int = 50):
     conn = get_connection()
@@ -173,12 +188,8 @@ def list_active_oco_links(limit: int = 50):
     conn.close()
     return rows
 
+
 def has_active_oco_for_symbol(symbol: str) -> bool:
-    """
-    True თუ მოცემულ symbol-ზე (მაგ: BTC/USDT) არსებობს ACTIVE OCO.
-    ეს გვჭირდება multi-symbol გენერატორში, რომ 1 აქტიურმა OCO-მ
-    არ დაბლოკოს სხვა ქოინებზე სიგნალების გენერაცია.
-    """
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
@@ -194,6 +205,7 @@ def has_active_oco_for_symbol(symbol: str) -> bool:
     conn.close()
     return row is not None
 
+
 def get_open_positions_count() -> int:
     conn = get_connection()
     cur = conn.cursor()
@@ -202,7 +214,8 @@ def get_open_positions_count() -> int:
     conn.close()
     return n
 
-# ---------------- EXECUTED SIGNALS (IDEMPOTENCY) ----------------
+
+# ---------------- EXECUTED SIGNALS (IDEMPOTENCY + AUDIT) ----------------
 
 def signal_id_already_executed(signal_id: str) -> bool:
     conn = get_connection()
@@ -215,12 +228,19 @@ def signal_id_already_executed(signal_id: str) -> bool:
     conn.close()
     return row is not None
 
-def mark_signal_id_executed(signal_id: str, signal_hash: str = None, action: str = None, symbol: str = None):
+
+def mark_signal_id_executed(
+    signal_id: str,
+    signal_hash: str = None,
+    action: str = None,
+    symbol: str = None
+):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
         """
-        INSERT OR IGNORE INTO executed_signals (signal_id, signal_hash, action, symbol, executed_at)
+        INSERT OR IGNORE INTO executed_signals
+        (signal_id, signal_hash, action, symbol, executed_at)
         VALUES (?, ?, ?, ?, ?)
         """,
         (
@@ -228,9 +248,8 @@ def mark_signal_id_executed(signal_id: str, signal_hash: str = None, action: str
             str(signal_hash) if signal_hash is not None else None,
             str(action) if action is not None else None,
             str(symbol) if symbol is not None else None,
-            datetime.utcnow().isoformat()
+            _utc_now()
         )
     )
     conn.commit()
     conn.close()
-
