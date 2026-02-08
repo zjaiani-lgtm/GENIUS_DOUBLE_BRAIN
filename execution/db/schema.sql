@@ -48,9 +48,21 @@ CREATE TABLE IF NOT EXISTS audit_log (
     created_at TEXT NOT NULL
 );
 
+-- ✅ executed_signals (Double Brain / idempotency + audit)
+CREATE TABLE IF NOT EXISTS executed_signals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id TEXT NOT NULL UNIQUE,
+    signal_hash TEXT,
+    action TEXT,
+    symbol TEXT,
+    executed_at TEXT NOT NULL
+);
+
 -- Optional: speed up lookups
 CREATE INDEX IF NOT EXISTS ix_audit_event_type ON audit_log(event_type);
 CREATE INDEX IF NOT EXISTS ix_positions_status ON positions(status);
 
--- Idempotency support (soft): ensure we can prevent duplicates by querying quickly
--- (We use has_executed_signal() in repository; unique constraint not required for v1.)
+-- executed_signals indexes
+CREATE INDEX IF NOT EXISTS idx_executed_signals_signal_id ON executed_signals(signal_id);
+CREATE INDEX IF NOT EXISTS idx_executed_signals_signal_hash ON executed_signals(signal_hash);
+CREATE INDEX IF NOT EXISTS idx_executed_signals_symbol ON executed_signals(symbol);
