@@ -48,7 +48,23 @@ CREATE TABLE IF NOT EXISTS audit_log (
     created_at TEXT NOT NULL
 );
 
--- ✅ executed_signals (Double Brain / idempotency + audit)
+CREATE TABLE IF NOT EXISTS oco_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    base_asset TEXT,
+    tp_order_id TEXT,
+    sl_order_id TEXT,
+    tp_price REAL,
+    sl_stop_price REAL,
+    sl_limit_price REAL,
+    amount REAL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- ✅ Double Brain idempotency + audit trail
 CREATE TABLE IF NOT EXISTS executed_signals (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     signal_id TEXT NOT NULL UNIQUE,
@@ -58,11 +74,10 @@ CREATE TABLE IF NOT EXISTS executed_signals (
     executed_at TEXT NOT NULL
 );
 
--- Optional: speed up lookups
+-- Indexes
 CREATE INDEX IF NOT EXISTS ix_audit_event_type ON audit_log(event_type);
 CREATE INDEX IF NOT EXISTS ix_positions_status ON positions(status);
+CREATE INDEX IF NOT EXISTS idx_oco_links_status ON oco_links(status);
 
--- executed_signals indexes
 CREATE INDEX IF NOT EXISTS idx_executed_signals_signal_id ON executed_signals(signal_id);
 CREATE INDEX IF NOT EXISTS idx_executed_signals_signal_hash ON executed_signals(signal_hash);
-CREATE INDEX IF NOT EXISTS idx_executed_signals_symbol ON executed_signals(symbol);
