@@ -3,7 +3,7 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
 
-DB_PATH = Path("/var/data/genius_bot.db")  # Persistent disk on Render
+DB_PATH = Path("/var/data/genius_bot.db")
 SCHEMA_PATH = Path("execution/db/schema.sql")
 
 
@@ -21,18 +21,14 @@ def get_connection() -> sqlite3.Connection:
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     cur = conn.cursor()
-    cur.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
-        (table,)
-    )
+    cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (table,))
     return cur.fetchone() is not None
 
 
 def _column_exists(conn: sqlite3.Connection, table: str, col: str) -> bool:
     cur = conn.cursor()
     cur.execute(f"PRAGMA table_info({table})")
-    cols = [r[1] for r in cur.fetchall()]  # r[1] = column name
-    return col in cols
+    return col in [r[1] for r in cur.fetchall()]
 
 
 def _add_column_if_missing(conn: sqlite3.Connection, table: str, col: str, col_def: str) -> None:
@@ -44,36 +40,32 @@ def init_db() -> None:
     conn = get_connection()
     cur = conn.cursor()
 
-    # 1) Apply schema.sql (source of truth)
+    # 1) apply schema.sql BUT (important) avoid executed_signals indexes here
     if SCHEMA_PATH.exists():
         schema_sql = SCHEMA_PATH.read_text(encoding="utf-8")
-        conn.executescript(schema_sql)
-    else:
-        # fallback (should not happen): minimal safety
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS system_state (
-            id INTEGER PRIMARY KEY,
-            mode TEXT NOT NULL,
-            status TEXT NOT NULL,
-            kill_switch INTEGER NOT NULL,
-            startup_sync_ok INTEGER NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-        """)
 
-    # 2) MIGRATIONS for old DBs (Render persistent disk)
-    # system_state: ensure 'mode' exists
+        # ✅ strip indexes that may reference columns not yet migrated
+        filtered_lines = []
+        for line in schema_sql.splitlines():
+            l = line.strip().lower()
+            if "create index" in l and "executed_signals" in l:
+                # skip executed_signals indexes for now
+                continue
+            filtered_lines.append(line)
+        conn.executescript("\n".join(filtered_lines))
+
+    # 2) MIGRATIONS for older DB versions
+    # system_state might be older without mode
     _add_column_if_missing(conn, "system_state", "mode", "TEXT")
 
-    # executed_signals: ensure required columns exist
+    # executed_signals: upgrade old table to new columns
     if _table_exists(conn, "executed_signals"):
         _add_column_if_missing(conn, "executed_signals", "signal_hash", "TEXT")
         _add_column_if_missing(conn, "executed_signals", "action", "TEXT")
         _add_column_if_missing(conn, "executed_signals", "symbol", "TEXT")
-        # executed_at is required; very old versions might miss it
         _add_column_if_missing(conn, "executed_signals", "executed_at", "TEXT")
     else:
-        # if missing entirely, create minimal compatible table
+        # create fresh compatible table
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS executed_signals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,22 +73,21 @@ def init_db() -> None:
             signal_hash TEXT,
             action TEXT,
             symbol TEXT,
-            executed_atFRS
             executed_at TEXT NOT NULL
         );
         """)
 
-    # indexes (safe)
+    # 3) create indexes AFTER migration (now columns exist)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_executed_signals_signal_id ON executed_signals(signal_id);")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_executed_signals_signal_hash ON executed_signals(signal_hash);")
 
-    # 3) Ensure system_state row exists (id=1)
+    # 4) ensure system_state row exists (id=1)
     now = _utc_now()
     cur.execute("SELECT COUNT(*) FROM system_state WHERE id=1")
     exists = int(cur.fetchone()[0] or 0)
 
     if exists == 0:
-        # default mode: DEMO (შეცვალე თუ გინდა LIVE/TESTNET)
+        # mode default: DEMO (შეცვალე თუ გინდა)
         cur.execute(
             """
             INSERT INTO system_state (id, mode, status, startup_sync_ok, kill_switch, updated_at)
@@ -105,7 +96,6 @@ def init_db() -> None:
             ("DEMO", "RUNNING", 1, 0, now),
         )
     else:
-        # touch updated_at
         cur.execute("UPDATE system_state SET updated_at=? WHERE id=1", (now,))
 
     conn.commit()
