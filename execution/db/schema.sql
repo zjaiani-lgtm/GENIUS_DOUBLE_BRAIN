@@ -79,5 +79,5 @@ CREATE INDEX IF NOT EXISTS ix_audit_event_type ON audit_log(event_type);
 CREATE INDEX IF NOT EXISTS ix_positions_status ON positions(status);
 CREATE INDEX IF NOT EXISTS idx_oco_links_status ON oco_links(status);
 
-CREATE INDEX IF NOT EXISTS idx_executed_signals_signal_id ON executed_signals(signal_id);
-CREATE INDEX IF NOT EXISTS idx_executed_signals_signal_hash ON executed_signals(signal_hash);
+
+
